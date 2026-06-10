@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 import { WalletConnectButton } from "./WalletConnectButton";
-import { NotificationBell } from "./NotificationBell";
 
 export function CapitalDeskShell({ children }: { children: ReactNode }) {
   return (
@@ -20,7 +19,6 @@ export function CapitalDeskShell({ children }: { children: ReactNode }) {
             <Link href="/consensus">Consensus</Link>
           </nav>
           <div className="flex items-center gap-3">
-            <NotificationBell />
             <WalletConnectButton />
           </div>
         </div>
