@@ -103,3 +103,12 @@ create policy "opportunities public read" on opportunities for select using (tru
 create policy "consensus public read" on consensus_results for select using (true);
 create policy "model_reviews public read" on model_reviews for select using (true);
 create policy "updates public read" on updates for select using (true);
+
+-- Grants for the service_role (server-side writes via SUPABASE_SERVICE_ROLE_KEY)
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+
+-- Read grants for the anon and authenticated roles
+grant select on profiles, opportunities, consensus_results, model_reviews, updates to anon, authenticated;
