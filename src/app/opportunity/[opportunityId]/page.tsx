@@ -1,13 +1,26 @@
 import Link from "next/link";
 import { getSnapshot } from "@/lib/store";
+import { getSupabaseAdmin } from "@/lib/supabase/client";
 import { CapitalBriefHeader } from "@/components/CapitalBriefHeader";
 import { ConsensusLedger } from "@/components/ConsensusLedger";
 import { AnalystSeatCard } from "@/components/AnalystSeatCard";
 import { ProofRail } from "@/components/ProofRail";
 import { EmptyState } from "@/components/EmptyState";
 import { SignalTabButton } from "@/components/SignalTabButton";
+import { ConsensusRunner } from "@/components/ConsensusRunner";
 
 export const dynamic = "force-dynamic";
+
+async function loadTxHashes(opportunityId: string): Promise<string[]> {
+  const sb = getSupabaseAdmin();
+  if (!sb) return [];
+  const { data } = await sb
+    .from("transactions")
+    .select("hash")
+    .eq("opportunity_id", opportunityId)
+    .order("created_at", { ascending: false });
+  return (data ?? []).map((r) => String(r.hash));
+}
 
 export default async function OpportunityPage({
   params,
@@ -22,7 +35,7 @@ export default async function OpportunityPage({
     return (
       <EmptyState
         title="Lookup failed"
-        body={`Could not load opportunity ${opportunityId}: ${(err as Error).message}. Check /api/health for diagnostics.`}
+        body={`Could not load opportunity ${opportunityId}: ${(err as Error).message}. Check /api/health.`}
       />
     );
   }
@@ -30,10 +43,12 @@ export default async function OpportunityPage({
     return (
       <EmptyState
         title="Opportunity not found"
-        body={`No record for ${opportunityId}. If you just submitted, the row was likely not persisted - visit /api/health to see why.`}
+        body={`No record for ${opportunityId}.`}
       />
     );
   }
+
+  const txHashes = await loadTxHashes(opportunityId);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
@@ -72,6 +87,8 @@ export default async function OpportunityPage({
           )}
         </section>
 
+        {!snap.consensus && <ConsensusRunner opportunity={snap.opportunity} />}
+
         <section>
           <h2 className="font-display text-xl text-deep-navy mb-4">Analyst Seats</h2>
           {snap.models.length === 0 ? (
@@ -100,7 +117,7 @@ export default async function OpportunityPage({
         </section>
       </div>
 
-      <ProofRail txHashes={snap.tx_hashes}>
+      <ProofRail txHashes={txHashes}>
         <Link href={`/opportunity/${opportunityId}/update`}>
           <SignalTabButton variant="review" className="w-full">
             SUBMIT FOLLOW-UP UPDATE
