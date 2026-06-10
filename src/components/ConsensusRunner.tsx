@@ -1,20 +1,19 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { SignalTabButton } from "./SignalTabButton";
+import { GENLAYER_STUDIONET } from "@/lib/genlayer/config";
 import type { Opportunity } from "@/types/consensus-capital";
 
 export function ConsensusRunner({ opportunity }: { opportunity: Opportunity }) {
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [hash, setHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function run() {
     setError(null);
+    setHash(null);
     setBusy(true);
     try {
-      setStatus("Submitting create_opportunity to GenLayer Studionet...");
       const res = await fetch("/api/genlayer/run-consensus", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -22,26 +21,7 @@ export function ConsensusRunner({ opportunity }: { opportunity: Opportunity }) {
       });
       const j = (await res.json().catch(() => ({}))) as { hash?: string; error?: string };
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setStatus(`Tx submitted${j.hash ? `: ${j.hash}` : ""}. Polling for consensus...`);
-
-      let attempts = 0;
-      while (attempts < 30) {
-        attempts += 1;
-        setStatus(`Polling consensus (${attempts}/30)...`);
-        const r = await fetch("/api/genlayer/sync-opportunity", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ opportunity_id: opportunity.opportunity_id }),
-        });
-        const sj = (await r.json().catch(() => ({}))) as { has_consensus?: boolean };
-        if (sj.has_consensus) {
-          setStatus("Consensus stored. Refreshing...");
-          router.refresh();
-          return;
-        }
-        await new Promise((res) => setTimeout(res, 5000));
-      }
-      setStatus("Consensus did not appear within 2.5 minutes. Check the GenLayer explorer.");
+      setHash(j.hash ?? "(submitted, no hash returned)");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -53,17 +33,37 @@ export function ConsensusRunner({ opportunity }: { opportunity: Opportunity }) {
     <div className="bg-white/70 border border-dusk-blue/20 rounded-2xl p-6">
       <h2 className="font-display text-xl text-deep-navy">Run GenLayer Consensus</h2>
       <p className="mt-2 text-sm text-deep-navy/70">
-        This sends create_opportunity to the contract. Seven independent evaluators
-        plus an aggregator will run on chain.
+        This sends create_opportunity to the contract from the operator wallet.
+        Seven independent evaluators plus an aggregator will run on chain.
       </p>
-      <div className="mt-4">
+      <div className="mt-4 flex flex-wrap gap-3">
         <SignalTabButton variant="review" disabled={busy} onClick={run}>
-          {busy ? "RUNNING..." : "RUN GENLAYER CONSENSUS"}
+          {busy ? "SUBMITTING..." : "RUN GENLAYER CONSENSUS"}
         </SignalTabButton>
       </div>
-      {status && <p className="mt-3 text-xs font-data text-dusk-blue break-all">{status}</p>}
+
+      {hash && (
+        <div className="mt-4 bg-mint-ledger/40 border border-aqua-shadow rounded-lg p-3">
+          <p className="text-deep-navy text-sm font-data">TX SUBMITTED</p>
+          <p className="text-deep-navy text-sm mt-1 break-all font-data">{hash}</p>
+          {hash.startsWith("0x") && (
+            <a
+              href={`${GENLAYER_STUDIONET.explorerUrl}/tx/${hash}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-dusk-blue text-xs underline mt-2 inline-block"
+            >
+              View on GenLayer explorer ↗
+            </a>
+          )}
+          <p className="text-deep-navy/70 text-xs mt-3">
+            Consensus typically appears within 30-90 seconds. Reload this page to fetch it.
+          </p>
+        </div>
+      )}
+
       {error && (
-        <div className="mt-3 bg-coral-caution/20 border border-coral-caution rounded-lg p-3">
+        <div className="mt-4 bg-coral-caution/20 border border-coral-caution rounded-lg p-3">
           <p className="text-deep-navy text-sm font-data">ERROR</p>
           <p className="text-deep-navy text-sm mt-1 break-all">{error}</p>
         </div>

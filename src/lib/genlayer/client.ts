@@ -46,6 +46,10 @@ export async function readContract<T = unknown>({ method, args = [] }: ReadArgs)
   }
 }
 
-export async function writeContract(): Promise<string | null> {
+export async function writeContract(_args?: {
+  method: string;
+  args?: unknown[];
+}): Promise<string | null> {
+  void _args;
   return null;
 }
