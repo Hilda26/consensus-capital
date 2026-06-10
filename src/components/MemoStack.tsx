@@ -2,7 +2,7 @@ const tabs = ["Risk", "Upside", "Market Fit", "Team", "Timing", "Traction", "Moa
 
 export function MemoStack() {
   return (
-    <div className="relative bg-deep-navy rounded-3xl p-8 text-ivory-signal shadow-xl">
+    <div className="relative bg-deep-navy rounded-2xl sm:rounded-3xl p-5 sm:p-8 text-ivory-signal shadow-xl">
       <div className="text-xs font-data text-pearl-aqua tracking-wider">CAPITAL BRIEF</div>
       <div className="mt-2 font-display text-2xl">CONSENSUS LEDGER</div>
       <div className="mt-6 grid grid-cols-2 gap-2">
