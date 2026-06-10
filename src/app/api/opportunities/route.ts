@@ -5,10 +5,20 @@ import type { Opportunity, OpportunityCategory } from "@/types/consensus-capital
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const proposer = url.searchParams.get("proposer")?.toLowerCase();
     const snaps = await listSnapshots();
-    return NextResponse.json({ items: snaps.map((s) => s.opportunity) });
+    const filtered = proposer
+      ? snaps.filter((s) => s.opportunity.proposer_address.toLowerCase() === proposer)
+      : snaps;
+    return NextResponse.json({
+      items: filtered.map((s) => ({
+        opportunity: s.opportunity,
+        consensus: s.consensus,
+      })),
+    });
   } catch (err) {
     return NextResponse.json(
       { items: [], error: (err as Error).message },
