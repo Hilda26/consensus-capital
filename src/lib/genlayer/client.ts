@@ -1,41 +1,51 @@
 import { CONSENSUS_CAPITAL_CONTRACT, isContractConfigured } from "./config";
 
 type ReadArgs = { method: string; args?: unknown[] };
-type WriteArgs = { method: string; args?: unknown[] };
 
-async function importSdk() {
+type GLClient = {
+  readContract: (cfg: {
+    address: string;
+    functionName: string;
+    args?: unknown[];
+  }) => Promise<unknown>;
+  writeContract: (cfg: {
+    address: string;
+    functionName: string;
+    args?: unknown[];
+    value: bigint;
+  }) => Promise<unknown>;
+};
+
+async function getReadClient(): Promise<GLClient | null> {
+  if (!isContractConfigured()) return null;
   try {
-    return await import("genlayer-js");
+    const sdk = await import("genlayer-js");
+    const chains = await import("genlayer-js/chains");
+    const studionet = (chains as unknown as { studionet: unknown }).studionet;
+    const createClient = (sdk as unknown as { createClient: (cfg: unknown) => GLClient }).createClient;
+    return createClient({ chain: studionet });
   } catch {
     return null;
   }
 }
 
 export async function readContract<T = unknown>({ method, args = [] }: ReadArgs): Promise<T | null> {
-  if (!isContractConfigured()) return null;
-  const sdk = await importSdk();
-  if (!sdk) return null;
-  const anySdk = sdk as unknown as {
-    createClient?: (cfg: unknown) => {
-      readContract: (cfg: { address: string; method: string; args: unknown[] }) => Promise<T>;
-    };
-  };
-  if (!anySdk.createClient) return null;
-  const client = anySdk.createClient({});
-  return client.readContract({ address: CONSENSUS_CAPITAL_CONTRACT, method, args });
+  const client = await getReadClient();
+  if (!client) return null;
+  try {
+    const res = await client.readContract({
+      address: CONSENSUS_CAPITAL_CONTRACT,
+      functionName: method,
+      args,
+    });
+    if (res == null) return null;
+    if (typeof res === "string") return res as T;
+    return res as T;
+  } catch {
+    return null;
+  }
 }
 
-export async function writeContract({ method, args = [] }: WriteArgs): Promise<string | null> {
-  if (!isContractConfigured()) return null;
-  const sdk = await importSdk();
-  if (!sdk) return null;
-  const anySdk = sdk as unknown as {
-    createClient?: (cfg: unknown) => {
-      writeContract: (cfg: { address: string; method: string; args: unknown[] }) => Promise<{ hash: string }>;
-    };
-  };
-  if (!anySdk.createClient) return null;
-  const client = anySdk.createClient({});
-  const res = await client.writeContract({ address: CONSENSUS_CAPITAL_CONTRACT, method, args });
-  return res?.hash ?? null;
+export async function writeContract(): Promise<string | null> {
+  return null;
 }

@@ -6,39 +6,14 @@ import { getSupabaseAdmin } from "@/lib/supabase/client";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-type GLClient = {
-  writeContract: (cfg: {
-    address: string;
-    functionName: string;
-    args: unknown[];
-  }) => Promise<{ hash?: string } | string>;
-};
-
-type GLSdk = {
-  createClient?: (cfg: unknown) => GLClient;
-  createAccount?: (pk: string) => unknown;
-  chains?: Record<string, unknown>;
-};
-
-async function loadSdk(): Promise<GLSdk | null> {
-  try {
-    return (await import("genlayer-js")) as unknown as GLSdk;
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(req: Request) {
   if (!isContractConfigured()) {
     return NextResponse.json({ error: "contract not configured" }, { status: 500 });
   }
-  const pk = process.env.GENLAYER_OPERATOR_PRIVATE_KEY;
+  const pk = process.env.GENLAYER_OPERATOR_PRIVATE_KEY as `0x${string}` | undefined;
   if (!pk) {
     return NextResponse.json(
-      {
-        error:
-          "GENLAYER_OPERATOR_PRIVATE_KEY not set. Add a funded Studionet private key to Vercel env vars.",
-      },
+      { error: "GENLAYER_OPERATOR_PRIVATE_KEY not set" },
       { status: 500 },
     );
   }
@@ -47,18 +22,23 @@ export async function POST(req: Request) {
   const snap = await getSnapshot(opportunity_id);
   if (!snap) return NextResponse.json({ error: "opportunity not found" }, { status: 404 });
 
-  const sdk = await loadSdk();
-  if (!sdk?.createClient || !sdk?.createAccount) {
-    return NextResponse.json(
-      { error: "genlayer-js SDK shape unexpected: createClient or createAccount missing" },
-      { status: 500 },
-    );
-  }
-
   try {
+    const sdk = (await import("genlayer-js")) as unknown as {
+      createClient: (cfg: unknown) => {
+        writeContract: (cfg: {
+          account: unknown;
+          address: string;
+          functionName: string;
+          args: unknown[];
+          value: bigint;
+        }) => Promise<unknown>;
+      };
+      createAccount: (pk: `0x${string}`) => unknown;
+    };
+    const chains = (await import("genlayer-js/chains")) as unknown as { studionet: unknown };
+
     const account = sdk.createAccount(pk);
-    const chain = sdk.chains?.studionet ?? sdk.chains?.simulator ?? undefined;
-    const client = sdk.createClient({ chain, account } as unknown);
+    const client = sdk.createClient({ chain: chains.studionet, account });
 
     const oppPayload = {
       title: snap.opportunity.title,
@@ -75,11 +55,19 @@ export async function POST(req: Request) {
     };
 
     const res = await client.writeContract({
+      account,
       address: CONSENSUS_CAPITAL_CONTRACT,
       functionName: "create_opportunity",
       args: [opportunity_id, JSON.stringify(oppPayload)],
+      value: 0n,
     });
-    const hash = typeof res === "string" ? res : (res.hash ?? "");
+
+    const hash =
+      typeof res === "string"
+        ? res
+        : (res as { hash?: string; transactionHash?: string })?.hash ??
+          (res as { transactionHash?: string })?.transactionHash ??
+          "";
 
     if (hash) {
       const sb = getSupabaseAdmin();
@@ -96,9 +84,9 @@ export async function POST(req: Request) {
       ...snap,
       opportunity: { ...snap.opportunity, status: "UNDER_REVIEW" },
     });
-
     return NextResponse.json({ ok: true, hash });
   } catch (err) {
+    console.error("[run-consensus] failed:", err);
     return NextResponse.json(
       { error: `contract write failed: ${(err as Error).message}` },
       { status: 500 },
