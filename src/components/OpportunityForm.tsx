@@ -60,9 +60,10 @@ export function OpportunityForm() {
     setError(null);
     setBusy(true);
 
+    const fd = new FormData(e.currentTarget);
+
     const proposer = await readWalletAddress();
 
-    const fd = new FormData(e.currentTarget);
     const payload = {
       title: String(fd.get("title") ?? ""),
       category: String(fd.get("category") ?? "OTHER"),
