@@ -17,8 +17,38 @@ const CATEGORIES: OpportunityCategory[] = [
   "OTHER",
 ];
 
-type Eth = { request: (a: { method: string; params?: unknown[] }) => Promise<unknown> };
-declare global { interface Window { ethereum?: Eth } }
+type EthLike = {
+  request: (a: { method: string; params?: unknown[] }) => Promise<unknown>;
+};
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("timeout")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+async function readWalletAddress(): Promise<string> {
+  const fallback = "0x0000000000000000000000000000000000000000";
+  if (typeof window === "undefined") return fallback;
+  const eth = (window as unknown as { ethereum?: EthLike }).ethereum;
+  if (!eth) return fallback;
+  try {
+    const accs = (await withTimeout(eth.request({ method: "eth_accounts" }), 2500)) as string[];
+    return accs?.[0] ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export function OpportunityForm() {
   const router = useRouter();
@@ -30,16 +60,7 @@ export function OpportunityForm() {
     setError(null);
     setBusy(true);
 
-    let proposer = "0x0000000000000000000000000000000000000000";
-    try {
-      const eth = typeof window !== "undefined" ? window.ethereum : undefined;
-      if (eth) {
-        const accs = (await eth.request({ method: "eth_accounts" })) as string[];
-        if (accs[0]) proposer = accs[0];
-      }
-    } catch {
-      // ignore - keep zero address
-    }
+    const proposer = await readWalletAddress();
 
     const fd = new FormData(e.currentTarget);
     const payload = {
@@ -58,19 +79,25 @@ export function OpportunityForm() {
       proposer_address: proposer,
     };
     try {
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), 25000);
       const res = await fetch("/api/opportunities", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(abortTimer));
+
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.detail ?? j.error ?? "Submission failed");
+        throw new Error(j.detail ?? j.error ?? `Submission failed (HTTP ${res.status})`);
       }
-      const j = (await res.json()) as { opportunity_id: string };
+      const j = (await res.json()) as { opportunity_id?: string; error?: string };
+      if (!j.opportunity_id) throw new Error(j.error ?? "No opportunity id returned");
       router.push(`/opportunity/${j.opportunity_id}`);
     } catch (err) {
-      setError((err as Error).message);
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg === "The user aborted a request." ? "Request timed out after 25s" : msg);
       setBusy(false);
     }
   }
@@ -132,7 +159,12 @@ export function OpportunityForm() {
         <label className={label}>Currency</label>
         <input name="currency" className={field} defaultValue="USD" />
       </div>
-      {error && <p className="text-coral-caution text-sm">{error}</p>}
+      {error && (
+        <div className="bg-coral-caution/20 border border-coral-caution rounded-lg p-3">
+          <p className="text-deep-navy text-sm font-data">ERROR</p>
+          <p className="text-deep-navy text-sm mt-1">{error}</p>
+        </div>
+      )}
       <div>
         <SignalTabButton type="submit" disabled={busy}>
           {busy ? "SAVING..." : "● SUBMIT OPPORTUNITY"}

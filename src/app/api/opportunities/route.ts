@@ -6,13 +6,25 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET() {
-  const snaps = await listSnapshots();
-  return NextResponse.json({ items: snaps.map((s) => s.opportunity) });
+  try {
+    const snaps = await listSnapshots();
+    return NextResponse.json({ items: snaps.map((s) => s.opportunity) });
+  } catch (err) {
+    return NextResponse.json(
+      { items: [], error: (err as Error).message },
+      { status: 200 },
+    );
+  }
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as Partial<Opportunity> & { proposer_address?: string };
-  if (!body.title || typeof body.title !== "string") {
+  let body: Partial<Opportunity> & { proposer_address?: string };
+  try {
+    body = (await req.json()) as Partial<Opportunity> & { proposer_address?: string };
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  if (!body.title || typeof body.title !== "string" || !body.title.trim()) {
     return NextResponse.json({ error: "title required" }, { status: 400 });
   }
   const id = `opp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -34,13 +46,12 @@ export async function POST(req: Request) {
     created_at: new Date().toISOString(),
   };
 
+  let warning: string | null = null;
   try {
     await saveSnapshot({ opportunity, models: [], consensus: null, tx_hashes: [] });
   } catch (err) {
-    return NextResponse.json(
-      { error: "failed to persist opportunity", detail: (err as Error).message },
-      { status: 500 },
-    );
+    warning = (err as Error).message;
+    console.error("[POST /api/opportunities] saveSnapshot failed:", warning);
   }
-  return NextResponse.json({ opportunity_id: id });
+  return NextResponse.json({ opportunity_id: id, warning });
 }

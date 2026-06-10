@@ -15,12 +15,22 @@ export default async function OpportunityPage({
   params: Promise<{ opportunityId: string }>;
 }) {
   const { opportunityId } = await params;
-  const snap = await getSnapshot(opportunityId);
+  let snap;
+  try {
+    snap = await getSnapshot(opportunityId);
+  } catch (err) {
+    return (
+      <EmptyState
+        title="Lookup failed"
+        body={`Could not load opportunity ${opportunityId}: ${(err as Error).message}. Check /api/health for diagnostics.`}
+      />
+    );
+  }
   if (!snap) {
     return (
       <EmptyState
         title="Opportunity not found"
-        body="This opportunity does not exist in the local index."
+        body={`No record for ${opportunityId}. If you just submitted, the row was likely not persisted - visit /api/health to see why.`}
       />
     );
   }
