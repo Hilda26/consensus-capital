@@ -115,8 +115,8 @@ async function fetchFromSupabase(opportunityId: string): Promise<Snapshot | null
 export async function saveSnapshot(s: Snapshot): Promise<void> {
   memory.set(s.opportunity.opportunity_id, s);
   const sb = getSupabaseAdmin();
-  if (!sb) return;
-  await sb.from("opportunities").upsert({
+  if (!sb) throw new Error("Supabase admin client unavailable - check SUPABASE_SERVICE_ROLE_KEY");
+  const { error: oppErr } = await sb.from("opportunities").upsert({
     opportunity_id: s.opportunity.opportunity_id,
     proposer_address: s.opportunity.proposer_address,
     title: s.opportunity.title,
@@ -132,6 +132,7 @@ export async function saveSnapshot(s: Snapshot): Promise<void> {
     currency: s.opportunity.currency,
     status: s.opportunity.status,
   });
+  if (oppErr) throw new Error(`opportunities upsert failed: ${oppErr.message}`);
   if (s.consensus) {
     await sb.from("consensus_results").upsert({
       opportunity_id: s.consensus.opportunity_id,

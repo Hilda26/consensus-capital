@@ -17,6 +17,9 @@ const CATEGORIES: OpportunityCategory[] = [
   "OTHER",
 ];
 
+type Eth = { request: (a: { method: string; params?: unknown[] }) => Promise<unknown> };
+declare global { interface Window { ethereum?: Eth } }
+
 export function OpportunityForm() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -26,6 +29,18 @@ export function OpportunityForm() {
     e.preventDefault();
     setError(null);
     setBusy(true);
+
+    let proposer = "0x0000000000000000000000000000000000000000";
+    try {
+      const eth = typeof window !== "undefined" ? window.ethereum : undefined;
+      if (eth) {
+        const accs = (await eth.request({ method: "eth_accounts" })) as string[];
+        if (accs[0]) proposer = accs[0];
+      }
+    } catch {
+      // ignore - keep zero address
+    }
+
     const fd = new FormData(e.currentTarget);
     const payload = {
       title: String(fd.get("title") ?? ""),
@@ -40,6 +55,7 @@ export function OpportunityForm() {
         .split("\n").map((s) => s.trim()).filter(Boolean),
       amount_sought: String(fd.get("amount_sought") ?? ""),
       currency: String(fd.get("currency") ?? "USD"),
+      proposer_address: proposer,
     };
     try {
       const res = await fetch("/api/opportunities", {
@@ -49,7 +65,7 @@ export function OpportunityForm() {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? "Submission failed");
+        throw new Error(j.detail ?? j.error ?? "Submission failed");
       }
       const j = (await res.json()) as { opportunity_id: string };
       router.push(`/opportunity/${j.opportunity_id}`);
@@ -119,7 +135,7 @@ export function OpportunityForm() {
       {error && <p className="text-coral-caution text-sm">{error}</p>}
       <div>
         <SignalTabButton type="submit" disabled={busy}>
-          {busy ? "RUNNING CONSENSUS..." : "● SUBMIT OPPORTUNITY"}
+          {busy ? "SAVING..." : "● SUBMIT OPPORTUNITY"}
         </SignalTabButton>
       </div>
     </form>

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { listSnapshots, saveSnapshot } from "@/lib/store";
-import { runConsensusPipeline } from "@/lib/pipeline";
 import type { Opportunity, OpportunityCategory } from "@/types/consensus-capital";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET() {
   const snaps = await listSnapshots();
@@ -11,14 +11,14 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as Partial<Opportunity>;
+  const body = (await req.json()) as Partial<Opportunity> & { proposer_address?: string };
   if (!body.title || typeof body.title !== "string") {
     return NextResponse.json({ error: "title required" }, { status: 400 });
   }
   const id = `opp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const opportunity: Opportunity = {
     opportunity_id: id,
-    proposer_address: "0x0000000000000000000000000000000000000000",
+    proposer_address: body.proposer_address ?? "0x0000000000000000000000000000000000000000",
     title: body.title,
     category: (body.category as OpportunityCategory) ?? "OTHER",
     summary: body.summary ?? "",
@@ -34,7 +34,13 @@ export async function POST(req: Request) {
     created_at: new Date().toISOString(),
   };
 
-  const result = await runConsensusPipeline(opportunity);
-  await saveSnapshot(result);
+  try {
+    await saveSnapshot({ opportunity, models: [], consensus: null, tx_hashes: [] });
+  } catch (err) {
+    return NextResponse.json(
+      { error: "failed to persist opportunity", detail: (err as Error).message },
+      { status: 500 },
+    );
+  }
   return NextResponse.json({ opportunity_id: id });
 }
