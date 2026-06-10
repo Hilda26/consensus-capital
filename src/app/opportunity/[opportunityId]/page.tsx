@@ -8,6 +8,7 @@ import { ProofRail } from "@/components/ProofRail";
 import { EmptyState } from "@/components/EmptyState";
 import { SignalTabButton } from "@/components/SignalTabButton";
 import { ConsensusRunner } from "@/components/ConsensusRunner";
+import { AutoSync } from "@/components/AutoSync";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,11 @@ export default async function OpportunityPage({
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="grid gap-6">
         <CapitalBriefHeader opportunity={snap.opportunity} />
+
+        <AutoSync
+          opportunityId={opportunityId}
+          alreadyHasConsensus={Boolean(snap.consensus)}
+        />
 
         <section className="bg-white/70 border border-dusk-blue/20 rounded-2xl p-6">
           <h2 className="font-display text-xl text-deep-navy">Thesis Memo</h2>
