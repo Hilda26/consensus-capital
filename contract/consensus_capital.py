@@ -1,4 +1,4 @@
-# v0.3.1 - clamp LLM-returned unit values into [0,1] instead of rejecting
+# v0.3.2 - lenient JSON extraction + strict-output prompt suffix
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
@@ -44,6 +44,37 @@ def _clamp_score(v):
 def _json_loads(raw: str, err: str):
     try:
         return json.loads(raw)
+    except Exception:
+        raise gl.vm.UserError(err)
+
+
+def _extract_json_lenient(raw, err: str):
+    """Parse JSON from LLM output even when wrapped in markdown fences,
+    surrounded by prose, or contains stray whitespace. Falls back to strict
+    parsing if extraction fails."""
+    if not isinstance(raw, str):
+        raise gl.vm.UserError(err)
+    s = raw.strip()
+    # Strip markdown code fence: ```json ... ``` or ``` ... ```
+    if s.startswith("```"):
+        first_newline = s.find("\n")
+        if first_newline > 0:
+            s = s[first_newline + 1:]
+        if s.endswith("```"):
+            s = s[:-3]
+        s = s.strip()
+    # Slice between first { and last } for object payloads
+    first_brace = s.find("{")
+    last_brace = s.rfind("}")
+    if first_brace >= 0 and last_brace > first_brace:
+        candidate = s[first_brace:last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    # Final attempt against the cleaned string
+    try:
+        return json.loads(s)
     except Exception:
         raise gl.vm.UserError(err)
 
@@ -137,7 +168,14 @@ Assess the opportunity realistically across:
 - moat
 
 Capture uncertainty and missing evidence.
-Return strict JSON only.
+
+OUTPUT RULES (critical):
+- Your entire response must be a single valid JSON object and nothing else.
+- Do NOT wrap the JSON in markdown code fences (no ```json, no ```).
+- Do NOT include any prose, headings, or commentary before or after the JSON.
+- Your response must start with the character { and end with the character }.
+- All numeric values must be plain numbers (e.g. 72 or 0.84, not "72%" or "0.84").
+- All keys and string values must be double-quoted.
 """
 
 
@@ -148,7 +186,13 @@ If models disagree, surface it through the disagreement index and reasoning.
 Do not guarantee investment outcomes.
 Build a recommendation band based on evidence, model outputs, and uncertainty.
 
-Return strict JSON only.
+OUTPUT RULES (critical):
+- Your entire response must be a single valid JSON object and nothing else.
+- Do NOT wrap the JSON in markdown code fences (no ```json, no ```).
+- Do NOT include any prose, headings, or commentary before or after the JSON.
+- Your response must start with the character { and end with the character }.
+- All numeric values must be plain numbers.
+- All keys and string values must be double-quoted.
 """
 
 
@@ -330,7 +374,7 @@ class ConsensusCapital(gl.Contract):
         for focus in DIMENSIONS:
             raw = self._evaluate_dimension(enriched_input, focus)
 
-            parsed = _json_loads(raw, "evaluator " + focus + " returned invalid JSON")
+            parsed = _extract_json_lenient(raw, "evaluator " + focus + " returned invalid JSON")
             _validate_model_output(parsed, focus)
 
             outputs.append(parsed)
@@ -338,7 +382,7 @@ class ConsensusCapital(gl.Contract):
         self.model_outputs[opportunity_id] = _json_dumps(outputs)
 
         consensus_raw = self._aggregate_consensus(_json_dumps(outputs), opportunity_id)
-        consensus = _json_loads(consensus_raw, "aggregator returned invalid JSON")
+        consensus = _extract_json_lenient(consensus_raw, "aggregator returned invalid JSON")
 
         if consensus.get("opportunity_id") != opportunity_id:
             consensus["opportunity_id"] = opportunity_id
