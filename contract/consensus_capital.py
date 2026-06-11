@@ -1,4 +1,4 @@
-# v0.3.2 - lenient JSON extraction + strict-output prompt suffix
+# v0.4.0 - full fault tolerance: any LLM failure substitutes a safe default; tx always commits
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
@@ -83,6 +83,87 @@ def _json_dumps(data) -> str:
     return json.dumps(data, separators=(",", ":"), sort_keys=True)
 
 
+def _zero_dims():
+    out = {}
+    for k in DIMENSIONS:
+        out[k] = 0
+    return out
+
+
+def _default_model_output(focus: str, reason: str):
+    """Safe default returned when an evaluator's LLM output can't be used.
+    Marks itself as a fallback so the UI can render it as such."""
+    return {
+        "model_id": "fallback_" + focus,
+        "dimension_focus": focus,
+        "dimension_scores": _zero_dims(),
+        "recommendation_hint": "SPECULATIVE",
+        "strengths": [],
+        "weaknesses": ["Evaluator for this dimension failed: " + reason],
+        "unknowns": ["All values are placeholders due to evaluator failure."],
+        "reasoning": "This dimension could not be scored. Re-run consensus to retry.",
+        "confidence": 0.0,
+    }
+
+
+def _default_consensus_from_models(opportunity_id: str, models, reason: str):
+    """Build a deterministic fallback consensus by averaging whichever model
+    outputs were valid. Used when the aggregator itself fails or produces
+    unusable JSON."""
+    valid = []
+    for m in models:
+        if isinstance(m, dict) and m.get("confidence", 0.0) > 0.0:
+            valid.append(m)
+    if len(valid) == 0:
+        return {
+            "opportunity_id": opportunity_id,
+            "consensus_score": 0,
+            "confidence": 0.0,
+            "disagreement_index": 1.0,
+            "recommendation_band": "SPECULATIVE",
+            "dimension_scores": _zero_dims(),
+            "summary": "Aggregator failed and no evaluator outputs were usable. Re-run consensus.",
+            "strengths": [],
+            "weaknesses": ["Aggregator failed: " + reason],
+            "unknowns": ["No usable model outputs."],
+            "follow_up_questions": [],
+            "reasoning": "Fallback consensus because aggregator output could not be parsed and no evaluators succeeded.",
+        }
+    dim_avg = _zero_dims()
+    for k in DIMENSIONS:
+        total = 0.0
+        for m in valid:
+            ds = m.get("dimension_scores") or {}
+            v = ds.get(k)
+            if _is_number(v):
+                total = total + v
+        dim_avg[k] = total / len(valid)
+    cs = 0.0
+    for k in DIMENSIONS:
+        cs = cs + dim_avg[k]
+    cs = cs / len(DIMENSIONS)
+    conf_total = 0.0
+    for m in valid:
+        c = m.get("confidence")
+        if _is_number(c):
+            conf_total = conf_total + c
+    avg_conf = conf_total / len(valid)
+    return {
+        "opportunity_id": opportunity_id,
+        "consensus_score": cs,
+        "confidence": avg_conf,
+        "disagreement_index": 0.5,
+        "recommendation_band": "WATCHLIST",
+        "dimension_scores": dim_avg,
+        "summary": "Fallback consensus computed from individual model outputs because the aggregator output could not be used.",
+        "strengths": [],
+        "weaknesses": ["Aggregator failed: " + reason],
+        "unknowns": ["This consensus was averaged deterministically, not produced by the aggregator."],
+        "follow_up_questions": [],
+        "reasoning": "The aggregator's response could not be parsed. This consensus is the arithmetic mean of the evaluator outputs that did succeed.",
+    }
+
+
 def _validate_dims(d: dict) -> None:
     _require(isinstance(d, dict), "dimension_scores must be object")
 
@@ -100,55 +181,103 @@ def _validate_string_list(m: dict, key: str) -> None:
         _require(isinstance(item, str), key + " items must be strings")
 
 
-def _validate_model_output(m: dict, expected_focus: str) -> None:
-    _require(isinstance(m, dict), "model output must be object")
-
-    _require(isinstance(m.get("model_id"), str) and m["model_id"].strip(), "model_id required")
-    _require(m.get("dimension_focus") == expected_focus, "bad dimension_focus")
-
-    _validate_dims(m.get("dimension_scores") or {})
-
-    _require(m.get("recommendation_hint") in ALLOWED_BANDS, "bad recommendation_hint")
-
+def _try_normalize_model_output(m, expected_focus: str):
+    """Tries to normalize an LLM-returned model output. Returns the normalized
+    dict if usable, or None if it cannot be salvaged. Never throws."""
+    if not isinstance(m, dict):
+        return None
+    # model_id - default if missing
+    mid = m.get("model_id")
+    if not isinstance(mid, str) or not mid.strip():
+        m["model_id"] = "evaluator_" + expected_focus
+    # dimension_focus - force-correct it
+    m["dimension_focus"] = expected_focus
+    # dimension_scores - require dict, clamp values, default missing to 0
+    ds = m.get("dimension_scores")
+    if not isinstance(ds, dict):
+        ds = {}
+    for k in DIMENSIONS:
+        v = ds.get(k)
+        if _is_number(v):
+            ds[k] = _clamp_score(v)
+        else:
+            ds[k] = 0
+    m["dimension_scores"] = ds
+    # recommendation_hint - default to SPECULATIVE if invalid
+    if m.get("recommendation_hint") not in ALLOWED_BANDS:
+        m["recommendation_hint"] = "SPECULATIVE"
+    # confidence - clamp; default to 0.5 if missing
     c = m.get("confidence")
-    _require(_is_number(c), "confidence must be a number")
-    m["confidence"] = _clamp_unit(c)
+    if _is_number(c):
+        m["confidence"] = _clamp_unit(c)
+    else:
+        m["confidence"] = 0.5
+    # reasoning - default to placeholder if missing
+    r = m.get("reasoning")
+    if not isinstance(r, str) or not r.strip():
+        m["reasoning"] = "Evaluator did not produce reasoning text."
+    # strengths/weaknesses/unknowns - coerce to string lists
+    for key in ("strengths", "weaknesses", "unknowns"):
+        arr = m.get(key)
+        if not isinstance(arr, list):
+            m[key] = []
+        else:
+            clean = []
+            for item in arr:
+                if isinstance(item, str):
+                    clean.append(item)
+            m[key] = clean
+    return m
 
-    _require(isinstance(m.get("reasoning"), str) and m["reasoning"].strip(), "reasoning empty")
 
-    _validate_string_list(m, "strengths")
-    _validate_string_list(m, "weaknesses")
-    _validate_string_list(m, "unknowns")
-
-
-def _validate_consensus(c: dict, opportunity_id: str) -> None:
-    _require(isinstance(c, dict), "consensus output must be object")
-
-    _require(c.get("opportunity_id") == opportunity_id, "bad opportunity_id")
-
+def _try_normalize_consensus(c, opportunity_id: str):
+    """Tries to normalize an LLM-returned consensus output. Returns the
+    normalized dict if usable, or None if it cannot be salvaged."""
+    if not isinstance(c, dict):
+        return None
+    c["opportunity_id"] = opportunity_id
     cs = c.get("consensus_score")
-    _require(_is_number(cs), "consensus_score must be a number")
-    c["consensus_score"] = _clamp_score(cs)
-
+    if _is_number(cs):
+        c["consensus_score"] = _clamp_score(cs)
+    else:
+        c["consensus_score"] = 0
     conf = c.get("confidence")
-    _require(_is_number(conf), "confidence must be a number")
-    c["confidence"] = _clamp_unit(conf)
-
+    if _is_number(conf):
+        c["confidence"] = _clamp_unit(conf)
+    else:
+        c["confidence"] = 0.0
     di = c.get("disagreement_index")
-    _require(_is_number(di), "disagreement_index must be a number")
-    c["disagreement_index"] = _clamp_unit(di)
-
-    _require(c.get("recommendation_band") in ALLOWED_BANDS, "bad recommendation_band")
-
-    _validate_dims(c.get("dimension_scores") or {})
-
-    _require(isinstance(c.get("summary"), str) and c["summary"].strip(), "summary empty")
-    _require(isinstance(c.get("reasoning"), str) and c["reasoning"].strip(), "reasoning empty")
-
-    _validate_string_list(c, "strengths")
-    _validate_string_list(c, "weaknesses")
-    _validate_string_list(c, "unknowns")
-    _validate_string_list(c, "follow_up_questions")
+    if _is_number(di):
+        c["disagreement_index"] = _clamp_unit(di)
+    else:
+        c["disagreement_index"] = 0.5
+    if c.get("recommendation_band") not in ALLOWED_BANDS:
+        c["recommendation_band"] = "SPECULATIVE"
+    ds = c.get("dimension_scores")
+    if not isinstance(ds, dict):
+        ds = {}
+    for k in DIMENSIONS:
+        v = ds.get(k)
+        if _is_number(v):
+            ds[k] = _clamp_score(v)
+        else:
+            ds[k] = 0
+    c["dimension_scores"] = ds
+    if not isinstance(c.get("summary"), str) or not c["summary"].strip():
+        c["summary"] = "Aggregator did not produce a summary."
+    if not isinstance(c.get("reasoning"), str) or not c["reasoning"].strip():
+        c["reasoning"] = "Aggregator did not produce reasoning text."
+    for key in ("strengths", "weaknesses", "unknowns", "follow_up_questions"):
+        arr = c.get(key)
+        if not isinstance(arr, list):
+            c[key] = []
+        else:
+            clean = []
+            for item in arr:
+                if isinstance(item, str):
+                    clean.append(item)
+            c[key] = clean
+    return c
 
 
 EVAL_PROMPT = """You are independently evaluating an investment opportunity for a decision-support product.
@@ -372,22 +501,41 @@ class ConsensusCapital(gl.Contract):
         outputs = []
 
         for focus in DIMENSIONS:
-            raw = self._evaluate_dimension(enriched_input, focus)
-
-            parsed = _extract_json_lenient(raw, "evaluator " + focus + " returned invalid JSON")
-            _validate_model_output(parsed, focus)
-
-            outputs.append(parsed)
+            try:
+                raw = self._evaluate_dimension(enriched_input, focus)
+            except Exception as e:
+                outputs.append(_default_model_output(focus, "evaluator threw: " + str(e)[:80]))
+                continue
+            parsed = None
+            try:
+                parsed = _extract_json_lenient(raw, "parse failed")
+            except Exception:
+                parsed = None
+            if parsed is None:
+                outputs.append(_default_model_output(focus, "could not parse JSON output"))
+                continue
+            normalized = _try_normalize_model_output(parsed, focus)
+            if normalized is None:
+                outputs.append(_default_model_output(focus, "output was not a usable object"))
+            else:
+                outputs.append(normalized)
 
         self.model_outputs[opportunity_id] = _json_dumps(outputs)
 
-        consensus_raw = self._aggregate_consensus(_json_dumps(outputs), opportunity_id)
-        consensus = _extract_json_lenient(consensus_raw, "aggregator returned invalid JSON")
+        consensus = None
+        try:
+            consensus_raw = self._aggregate_consensus(_json_dumps(outputs), opportunity_id)
+            try:
+                parsed_consensus = _extract_json_lenient(consensus_raw, "parse failed")
+            except Exception:
+                parsed_consensus = None
+            if parsed_consensus is not None:
+                consensus = _try_normalize_consensus(parsed_consensus, opportunity_id)
+        except Exception as e:
+            consensus = _default_consensus_from_models(opportunity_id, outputs, "aggregator threw: " + str(e)[:80])
 
-        if consensus.get("opportunity_id") != opportunity_id:
-            consensus["opportunity_id"] = opportunity_id
-
-        _validate_consensus(consensus, opportunity_id)
+        if consensus is None:
+            consensus = _default_consensus_from_models(opportunity_id, outputs, "aggregator output unusable")
 
         self.consensus_outputs[opportunity_id] = _json_dumps(consensus)
 
