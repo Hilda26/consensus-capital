@@ -94,6 +94,8 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     has_consensus: Boolean(consensus),
+    consensus_score: consensus?.consensus_score ?? null,
+    consensus_reasoning: consensus?.reasoning ?? null,
     model_count: models.length,
     debug,
   });
