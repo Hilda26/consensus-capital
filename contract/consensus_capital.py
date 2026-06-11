@@ -1,4 +1,4 @@
-# v0.3.0 - loosened equivalence rules so consensus reaches Accepted reliably
+# v0.3.1 - clamp LLM-returned unit values into [0,1] instead of rejecting
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
@@ -18,6 +18,29 @@ def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _clamp_unit(v):
+    """Coerce LLM-returned unit values into [0,1]. Handles common LLM
+    mistakes: returning percentages (85 for 0.85), returning >1, negatives."""
+    if not _is_number(v):
+        return v
+    if v > 1:
+        return min(v / 100.0, 1.0)
+    if v < 0:
+        return 0.0
+    return float(v)
+
+
+def _clamp_score(v):
+    """Coerce a dimension or consensus score into [0,100]."""
+    if not _is_number(v):
+        return v
+    if v < 0:
+        return 0.0
+    if v > 100:
+        return 100.0
+    return float(v)
+
+
 def _json_loads(raw: str, err: str):
     try:
         return json.loads(raw)
@@ -34,7 +57,8 @@ def _validate_dims(d: dict) -> None:
 
     for k in DIMENSIONS:
         v = d.get(k)
-        _require(_is_number(v) and 0 <= v <= 100, "dimension " + k + " out of range")
+        _require(_is_number(v), "dimension " + k + " must be a number")
+        d[k] = _clamp_score(v)
 
 
 def _validate_string_list(m: dict, key: str) -> None:
@@ -56,7 +80,8 @@ def _validate_model_output(m: dict, expected_focus: str) -> None:
     _require(m.get("recommendation_hint") in ALLOWED_BANDS, "bad recommendation_hint")
 
     c = m.get("confidence")
-    _require(_is_number(c) and 0 <= c <= 1, "confidence out of range")
+    _require(_is_number(c), "confidence must be a number")
+    m["confidence"] = _clamp_unit(c)
 
     _require(isinstance(m.get("reasoning"), str) and m["reasoning"].strip(), "reasoning empty")
 
@@ -71,13 +96,16 @@ def _validate_consensus(c: dict, opportunity_id: str) -> None:
     _require(c.get("opportunity_id") == opportunity_id, "bad opportunity_id")
 
     cs = c.get("consensus_score")
-    _require(_is_number(cs) and 0 <= cs <= 100, "consensus_score range")
+    _require(_is_number(cs), "consensus_score must be a number")
+    c["consensus_score"] = _clamp_score(cs)
 
     conf = c.get("confidence")
-    _require(_is_number(conf) and 0 <= conf <= 1, "confidence range")
+    _require(_is_number(conf), "confidence must be a number")
+    c["confidence"] = _clamp_unit(conf)
 
     di = c.get("disagreement_index")
-    _require(_is_number(di) and 0 <= di <= 1, "disagreement_index range")
+    _require(_is_number(di), "disagreement_index must be a number")
+    c["disagreement_index"] = _clamp_unit(di)
 
     _require(c.get("recommendation_band") in ALLOWED_BANDS, "bad recommendation_band")
 
